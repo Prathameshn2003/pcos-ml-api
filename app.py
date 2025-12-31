@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import pickle
 import numpy as np
+import pickle
 import os
 import warnings
+import xgboost as xgb
 
 # ---------------------------------
 # APP INIT
@@ -23,29 +24,29 @@ app.add_middleware(
 )
 
 # ---------------------------------
-# LOAD MODELS
+# PATHS
 # ---------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 
-def load_model(name):
+# ---------------------------------
+# LOAD PICKLE MODELS (SAFE)
+# ---------------------------------
+def load_pickle(name):
     path = os.path.join(MODEL_DIR, name)
     if not os.path.exists(path):
-        raise RuntimeError(f"❌ Model file missing: {path}")
+        raise RuntimeError(f"Model missing: {path}")
     with open(path, "rb") as f:
         return pickle.load(f)
 
-rf_model = load_model("rf_model.pkl")
-xgb_model = load_model("xgb_model.pkl")
-knn_model = load_model("knn_model.pkl")
-scaler = load_model("scaler.pkl")
+rf_model = load_pickle("rf_model.pkl")
+scaler = load_pickle("scaler.pkl")
 
-# ✅ FIX: remove deprecated attribute if present
-if hasattr(xgb_model, "use_label_encoder"):
-    try:
-        delattr(xgb_model, "use_label_encoder")
-    except Exception:
-        pass
+# ---------------------------------
+# LOAD XGBOOST BOOSTER (CRITICAL FIX)
+# ---------------------------------
+xgb_model = load_pickle("xgb_model.pkl")
+xgb_booster = xgb_model.get_booster()  # ✅ SAFE, VERSION-INDEPENDENT
 
 # ---------------------------------
 # INPUT SCHEMA
@@ -80,7 +81,7 @@ def health():
 @app.post("/predict-pcos")
 def predict_pcos(data: PCOSInput):
     try:
-        input_data = np.array([[ 
+        X = np.array([[ 
             data.age,
             data.weight,
             data.bmi,
@@ -98,13 +99,18 @@ def predict_pcos(data: PCOSInput):
             data.endometrium
         ]])
 
-        # Ignore sklearn feature-name warnings safely
+        # Ignore sklearn warnings safely
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            X_scaled = scaler.transform(input_data)
+            X_scaled = scaler.transform(X)
 
+        # Random Forest prediction
         rf_pred = int(rf_model.predict(X_scaled)[0])
-        xgb_pred = int(xgb_model.predict(X_scaled)[0])
+
+        # XGBoost prediction (SAFE)
+        dmatrix = xgb.DMatrix(X_scaled)
+        xgb_prob = float(xgb_booster.predict(dmatrix)[0])
+        xgb_pred = 1 if xgb_prob > 0.5 else 0
 
         final_pred = 1 if (rf_pred + xgb_pred) >= 1 else 0
 
@@ -131,7 +137,7 @@ def predict_pcos(data: PCOSInput):
         if total_score >= 4:
             final_pred = 1
 
-        if final_pred == 1:
+        if final_pred:
             risk_percentage = max(30, int((total_score / 9) * 100))
             risk_level = (
                 "Low" if risk_percentage < 50
