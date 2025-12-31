@@ -10,11 +10,11 @@ import numpy as np
 app = FastAPI(title="PCOS ML API")
 
 # ---------------------------------
-# CORS (REQUIRED FOR REACT)
+# CORS
 # ---------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # change to frontend URL in prod
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,13 +29,13 @@ knn_model = pickle.load(open("models/knn_model.pkl", "rb"))
 scaler = pickle.load(open("models/scaler.pkl", "rb"))
 
 # ---------------------------------
-# INPUT SCHEMA (MATCH train.py)
+# INPUT SCHEMA
 # ---------------------------------
 class PCOSInput(BaseModel):
     age: int
     weight: float
     bmi: float
-    cycle: int                 # 0 = irregular, 1 = regular
+    cycle: int
     cycle_length: int
     weight_gain: int
     hair_growth: int
@@ -49,34 +49,23 @@ class PCOSInput(BaseModel):
     endometrium: float
 
 # ---------------------------------
-# HEALTH CHECK
+# HEALTH
 # ---------------------------------
 @app.get("/")
 def health():
     return {"status": "PCOS ML API running"}
 
 # ---------------------------------
-# PREDICTION ENDPOINT
+# PREDICT
 # ---------------------------------
 @app.post("/predict-pcos")
 def predict_pcos(data: PCOSInput):
-
-    input_data = np.array([[
-        data.age,
-        data.weight,
-        data.bmi,
-        data.cycle,
-        data.cycle_length,
-        data.weight_gain,
-        data.hair_growth,
-        data.skin_darkening,
-        data.hair_loss,
-        data.pimples,
-        data.fast_food,
-        data.regular_exercise,
-        data.follicle_left,
-        data.follicle_right,
-        data.endometrium
+    input_data = np.array([[  
+        data.age, data.weight, data.bmi, data.cycle, data.cycle_length,
+        data.weight_gain, data.hair_growth, data.skin_darkening,
+        data.hair_loss, data.pimples, data.fast_food,
+        data.regular_exercise, data.follicle_left,
+        data.follicle_right, data.endometrium
     ]])
 
     X_scaled = scaler.transform(input_data)
@@ -86,9 +75,6 @@ def predict_pcos(data: PCOSInput):
 
     final_pred = 1 if (rf_pred + xgb_pred) >= 1 else 0
 
-    # ------------------------------
-    # RISK SCORING (SAME LOGIC)
-    # ------------------------------
     cycle_score = 1 if data.cycle == 0 else 0
     hormonal_score = (
         data.hair_growth +
@@ -109,19 +95,9 @@ def predict_pcos(data: PCOSInput):
     if total_score >= 4:
         final_pred = 1
 
-    # ------------------------------
-    # RESPONSE
-    # ------------------------------
     if final_pred == 1:
-        risk_percentage = int((total_score / 9) * 100)
-        risk_percentage = max(30, risk_percentage)
-
-        if risk_percentage < 50:
-            level = "Low"
-        elif risk_percentage < 70:
-            level = "Medium"
-        else:
-            level = "High"
+        risk_percentage = max(30, int((total_score / 9) * 100))
+        level = "Low" if risk_percentage < 50 else "Medium" if risk_percentage < 70 else "High"
 
         return {
             "pcos_detected": True,
@@ -134,3 +110,13 @@ def predict_pcos(data: PCOSInput):
         "risk_score": 0,
         "risk_level": "None"
     }
+
+# ---------------------------------
+# 🚀 START SERVER (REQUIRED FOR RAILWAY)
+# ---------------------------------
+import os
+import uvicorn
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
